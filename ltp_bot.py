@@ -3,15 +3,15 @@ import time
 import json
 import requests
 from datetime import datetime
+from sahiapi import SahiAPI
 
-SAHI_API_KEY = os.environ.get("SAHI_API_KEY", "")
-SAHI_ACCESS_TOKEN = os.environ.get("SAHI_ACCESS_TOKEN", "")
-SAHI_BASE_URL = "https://api.sahi.com/v1" # Sahi API docs ke exact URL se replace karein
+# GitHub Secrets se Credentials load honge
+KEY_ID = os.environ.get("SAHI_API_KEY", "").strip()
+SECRET = os.environ.get("SAHI_ACCESS_TOKEN", "").strip()
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-
-LOT_SIZE = 65
+LOT_SIZE = 65  # Nifty 1 Lot = 65
 SL_POINTS = 15
 TARGET_POINTS = 30
 STATE_FILE = "live_dashboard_data.json"
@@ -33,13 +33,44 @@ def send_telegram(msg):
     except Exception as e:
         print("Telegram Error:", e)
 
-def fetch_sahi_option_chain():
-    headers = {
-        "Authorization": f"Bearer {SAHI_ACCESS_TOKEN}",
-        "x-api-key": SAHI_API_KEY
-    }
-    resp = requests.get(f"{SAHI_BASE_URL}/market/option-chain?symbol=NIFTY", headers=headers, timeout=10)
-    return resp.json()
+def get_nifty_instrument_id(api):
+    """Scrip master se NIFTY Index ka instrument_id nikalega"""
+    for seg in [getattr(SahiAPI, "EXCHANGE_SEGMENT_NSE_IDX", None), getattr(SahiAPI, "EXCHANGE_SEGMENT_NSE", "NSE")]:
+        if not seg:
+            continue
+        try:
+            res = api.get_instruments_by_symbol("NIFTY", seg)
+            if res:
+                return res[0]["id"]
+        except Exception:
+            pass
+    # Fallback search for NIFTY 50
+    res = api.get_instruments_by_symbol("NIFTY 50", SahiAPI.EXCHANGE_SEGMENT_NSE)
+    return res[0]["id"]
+
+def parse_sahi_option_chain(chain):
+    """Sahi SDK ke option chain (paise) ko rupees aur clean format mein badlega"""
+    spot_price = round(chain["last_price"] / 100, 2)
+    strikes_data = []
+
+    for row in chain.get("strikes", []):
+        strike = round(row["strike"] / 100, 2)
+        # Sirf Spot ke +/- 600 points ke andar ki active strikes filter karein
+        if abs(strike - spot_price) > 600:
+            continue
+
+        ce = row.get("ce") or {}
+        pe = row.get("pe") or {}
+
+        strikes_data.append({
+            "strike": strike,
+            "ce_ltp": round((ce.get("last_price") or 0) / 100, 2),
+            "ce_oi": ce.get("open_interest") or ce.get("oi") or 0,
+            "pe_ltp": round((pe.get("last_price") or 0) / 100, 2),
+            "pe_oi": pe.get("open_interest") or pe.get("oi") or 0
+        })
+
+    return spot_price, strikes_data
 
 def analyze_ltp_rules(spot_price, option_chain):
     ce_list = sorted(option_chain, key=lambda x: x['ce_oi'], reverse=True)
@@ -154,17 +185,22 @@ def save_and_push_dashboard(state):
     os.system(f'git add {STATE_FILE} && git commit -m "Update live data" && git push')
 
 if __name__ == "__main__":
-    send_telegram("🚀 <b>Nifty LTP Calculator Paper Bot Started on Cloud!</b>")
+    api = SahiAPI.from_credentials(key_id=KEY_ID, secret=SECRET)
+    nifty_id = get_nifty_instrument_id(api)
+    send_telegram(f"🚀 <b>Nifty LTP Bot Connected!</b> (Nifty ID: {nifty_id})")
+
     while True:
         now = datetime.now().strftime("%H:%M")
         if now >= "15:25":
             send_telegram(f"🔔 <b>Market Closed!</b> Final Day P&L: ₹{portfolio['total_pnl']}")
             break
         try:
-            raw_data = fetch_sahi_option_chain()
-            state = analyze_ltp_rules(raw_data['spot_price'], raw_data['strikes'])
+            chain = api.get_option_chain(nifty_id)
+            spot_price, strikes = parse_sahi_option_chain(chain)
+            state = analyze_ltp_rules(spot_price, strikes)
             evaluate_trades(state)
             save_and_push_dashboard(state)
+            print("Updated:", state["spot"], "EOS:", state["eos"], "EOR:", state["eor"])
         except Exception as e:
             print("Loop Error:", e)
         time.sleep(20)
