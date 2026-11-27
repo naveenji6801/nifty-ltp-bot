@@ -32,33 +32,49 @@ def send_telegram(msg):
     except Exception as e:
         print("Telegram Error:", e)
 
-def get_nifty_instrument_id(api):
-    """Sahi SDK ke saare possible segments/symbols mein NIFTY Index ID dhundhega"""
-    segments = [
-        getattr(SahiAPI, attr) for attr in dir(SahiAPI) if attr.startswith("EXCHANGE_SEGMENT")
-    ]
+def find_valid_nifty_underlying(api):
+    """Sahi Scrip Master mein NIFTY ke saare matches check karke valid Option Chain ID nikalega"""
+    candidates = []
+    segments = [getattr(SahiAPI, attr) for attr in dir(SahiAPI) if attr.startswith("EXCHANGE_SEGMENT")]
     if not segments:
-        segments = ["NSE_INDEX", "NSE", "NFO", "NSE_FO"]
+        segments = ["NSE", "NFO", "NSE_INDEX", "NSE_FO", "IDX"]
 
     for sym in ["NIFTY", "NIFTY 50", "Nifty 50", "NIFTY50"]:
         for seg in segments:
             try:
                 res = api.get_instruments_by_symbol(sym, seg)
-                if res and isinstance(res, list) and len(res) > 0:
-                    print(f"Found NIFTY ID: {res[0]} in segment {seg}")
-                    return res[0]["id"]
+                if res and isinstance(res, list):
+                    for item in res:
+                        if item.get("id") not in candidates:
+                            candidates.append(item["id"])
             except Exception:
                 continue
 
-    # Agar symbol lookup na chale toh scrip master se direct NIFTY search karein
     if hasattr(api, "search_instruments"):
-        res = api.search_instruments("NIFTY")
-        for item in res:
-            if item.get("symbol") in ["NIFTY", "NIFTY 50", "Nifty 50"]:
-                return item["id"]
+        try:
+            for item in api.search_instruments("NIFTY"):
+                if item.get("id") not in candidates:
+                    candidates.append(item["id"])
+        except Exception:
+            pass
 
-    # Standard NSE Nifty 50 token fallback (26000)
-    return 26000
+    # Har candidate ID ko test karke dekhein ki kiske paas active Option Expiries / Chain hai
+    for cid in candidates:
+        try:
+            exp = api.get_option_expiries(cid)
+            if exp:
+                print(f"Verified Valid NIFTY Underlying ID: {cid} | Expiries: {exp}")
+                return cid
+        except Exception:
+            try:
+                chain = api.get_option_chain(cid)
+                if chain and chain.get("strikes"):
+                    print(f"Verified Valid NIFTY Underlying ID via chain: {cid}")
+                    return cid
+            except Exception:
+                continue
+
+    raise RuntimeError(f"Could not find valid NIFTY option underlying ID. Checked: {candidates}")
 
 def parse_sahi_option_chain(chain):
     spot_price = round(chain["last_price"] / 100, 2)
@@ -196,8 +212,8 @@ def save_and_push_dashboard(state):
 
 if __name__ == "__main__":
     api = SahiAPI.from_credentials(key_id=KEY_ID, secret=SECRET)
-    nifty_id = get_nifty_instrument_id(api)
-    send_telegram(f"🚀 <b>Nifty LTP Bot Connected!</b> (Nifty ID: {nifty_id})")
+    nifty_id = find_valid_nifty_underlying(api)
+    send_telegram(f"🚀 <b>Nifty LTP Bot Live!</b> (Verified Nifty ID: {nifty_id})")
 
     while True:
         now = datetime.now().strftime("%H:%M")
