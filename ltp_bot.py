@@ -5,7 +5,6 @@ import requests
 from datetime import datetime
 from sahiapi import SahiAPI
 
-# GitHub Secrets se Credentials load honge
 KEY_ID = os.environ.get("SAHI_API_KEY", "").strip()
 SECRET = os.environ.get("SAHI_ACCESS_TOKEN", "").strip()
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -34,28 +33,39 @@ def send_telegram(msg):
         print("Telegram Error:", e)
 
 def get_nifty_instrument_id(api):
-    """Scrip master se NIFTY Index ka instrument_id nikalega"""
-    for seg in [getattr(SahiAPI, "EXCHANGE_SEGMENT_NSE_IDX", None), getattr(SahiAPI, "EXCHANGE_SEGMENT_NSE", "NSE")]:
-        if not seg:
-            continue
-        try:
-            res = api.get_instruments_by_symbol("NIFTY", seg)
-            if res:
-                return res[0]["id"]
-        except Exception:
-            pass
-    # Fallback search for NIFTY 50
-    res = api.get_instruments_by_symbol("NIFTY 50", SahiAPI.EXCHANGE_SEGMENT_NSE)
-    return res[0]["id"]
+    """Sahi SDK ke saare possible segments/symbols mein NIFTY Index ID dhundhega"""
+    segments = [
+        getattr(SahiAPI, attr) for attr in dir(SahiAPI) if attr.startswith("EXCHANGE_SEGMENT")
+    ]
+    if not segments:
+        segments = ["NSE_INDEX", "NSE", "NFO", "NSE_FO"]
+
+    for sym in ["NIFTY", "NIFTY 50", "Nifty 50", "NIFTY50"]:
+        for seg in segments:
+            try:
+                res = api.get_instruments_by_symbol(sym, seg)
+                if res and isinstance(res, list) and len(res) > 0:
+                    print(f"Found NIFTY ID: {res[0]} in segment {seg}")
+                    return res[0]["id"]
+            except Exception:
+                continue
+
+    # Agar symbol lookup na chale toh scrip master se direct NIFTY search karein
+    if hasattr(api, "search_instruments"):
+        res = api.search_instruments("NIFTY")
+        for item in res:
+            if item.get("symbol") in ["NIFTY", "NIFTY 50", "Nifty 50"]:
+                return item["id"]
+
+    # Standard NSE Nifty 50 token fallback (26000)
+    return 26000
 
 def parse_sahi_option_chain(chain):
-    """Sahi SDK ke option chain (paise) ko rupees aur clean format mein badlega"""
     spot_price = round(chain["last_price"] / 100, 2)
     strikes_data = []
 
     for row in chain.get("strikes", []):
         strike = round(row["strike"] / 100, 2)
-        # Sirf Spot ke +/- 600 points ke andar ki active strikes filter karein
         if abs(strike - spot_price) > 600:
             continue
 
