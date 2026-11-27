@@ -1,0 +1,34 @@
+name: Nifty LTP Paper Bot
+
+on:
+  schedule:
+    # Roz subah 9:15 AM IST (3:45 AM UTC) Monday se Friday chalega
+    - cron: '45 3 * * 1-5'
+  workflow_dispatch: # Manual start button ke liye
+
+permissions:
+  contents: write
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 380
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Run LTP Bot
+        env:
+          SAHI_API_KEY: ${{ secrets.SAHI_API_KEY }}
+          SAHI_ACCESS_TOKEN: ${{ secrets.SAHI_ACCESS_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python ltp_bot.py
