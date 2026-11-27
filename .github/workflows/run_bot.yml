@@ -2,9 +2,8 @@ name: Nifty LTP Paper Bot
 
 on:
   schedule:
-    # Roz subah 9:15 AM IST (3:45 AM UTC) Monday se Friday chalega
     - cron: '45 3 * * 1-5'
-  workflow_dispatch: # Manual start button ke liye
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,8 +21,8 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install requests
-        run: pip install requests
+      - name: Install dependencies
+        run: pip install sahiapi requests
 
       - name: Run LTP Bot
         env:
